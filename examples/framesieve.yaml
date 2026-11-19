@@ -1,0 +1,46 @@
+# framesieve production configuration
+
+engine:
+  max_fps: 30
+  ring_buffer_size: 16
+  workers: 4
+  processing_format: "rgb24"
+  inactivity_flush: 2s
+
+vision:
+  # Fast screening gate: Hamming distance on 64-bit dHash
+  phash_threshold: 2
+
+  # Structural Similarity Index gate (values >= threshold discarded as static)
+  ssim_threshold: 0.985
+  luminance_only: true
+
+  # Global Motion Estimation (camera jitter rejection)
+  enable_motion_compensation: true
+  motion_jitter_threshold: 1.5
+
+  # Dynamic Region-of-Interest (ROI) parameters
+  pixel_delta_min: 24
+  min_cluster_area: 64
+  padding_margin: 32
+  patch_grid_align: 28 # Align dimensions to 28px VLM patch token tiles
+  max_roi_expansion: 0.75 # Switch to full frame if delta exceeds 75% area
+
+proxy:
+  listen_addr: "0.0.0.0:8088"
+  upstream_openai: "https://api.openai.com"
+  upstream_anthropic: "https://api.anthropic.com"
+  burst_pre_frames: 1
+  burst_post_frames: 1
+  burst_timeout: 500ms
+  output_image_codec: "jpeg"
+  image_quality: 85
+
+studio:
+  enabled: true
+  port: 8686
+  host: "0.0.0.0"
+  telemetry: true
+
+database:
+  path: "framesieve.db"

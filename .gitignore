@@ -1,0 +1,45 @@
+# Binaries and build artifacts
+/bin/
+/dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/framesieve
+/framesieve.exe
+
+# Go dependencies and cache
+/vendor/
+*.test
+*.out
+go.work
+
+# Node.js and Frontend
+/web/node_modules/
+/web/.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Database and Telemetry
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+telemetry.db*
+
+# IDE and OS
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Test recordings and local media
+/examples/*.mp4
+/tmp/
+/temp/
