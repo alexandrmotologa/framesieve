@@ -5,6 +5,12 @@ export interface BoundingBox {
   height: number;
 }
 
+export interface SemanticClassification {
+  type: string;
+  confidence: number;
+  description: string;
+}
+
 export interface FrameEvent {
   timestamp: string;
   trigger_frame: {
@@ -18,6 +24,7 @@ export interface FrameEvent {
   base64_data_uri?: string;
   ssim: number;
   roi?: BoundingBox;
+  classification?: SemanticClassification;
   tokens_saved: number;
   tokens_sent: number;
   full_tokens_cost: number;

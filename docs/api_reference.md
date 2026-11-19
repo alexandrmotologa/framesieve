@@ -10,12 +10,13 @@ framesieve stream [options]
 ```
 
 Options:
-- `-input <path|url|synthetic>`: Video input source. Can be a local file (`.mp4`, `.mkv`), RTSP URL (`rtsp://...`), or `synthetic` (default: `synthetic`).
+- `-input <path|url|screen|synthetic>`: Video input source. Can be a local file (`.mp4`, `.mkv`), RTSP URL (`rtsp://...`), `screen` (native Windows GDI desktop capture), or `synthetic` (default: `synthetic`).
 - `-config <path>`: Path to YAML configuration file.
 - `-fps <int>`: Frame rate for ingestion (default: `30`).
 - `-width <int>`: Frame width (default: `1280`).
 - `-height <int>`: Frame height (default: `720`).
 - `-port <int>`: Multimodal Studio port (default: `8686`).
+- `-record-dataset <path.jsonl>`: Optional path to export JSONL dataset for VLM fine-tuning.
 - `-no-studio`: Disables the web studio server.
 - `-db <path>`: SQLite database path for telemetry logging (default: `framesieve.db`).
 
@@ -38,17 +39,20 @@ Options:
 ---
 
 ### `framesieve bench`
-Executes CPU SIMD latency benchmarks and memory footprint verification.
+Executes CPU SIMD latency benchmarks across all 6 core computer vision modules.
 
 ```bash
 framesieve bench
 ```
 
 Outputs:
-- dHash latency per 1080p frame and throughput FPS.
-- SSIM latency per 1080p and 720p frame.
-- Dynamic ROI cluster extraction latency.
-- Heap allocation and system memory usage.
+1. Perceptual dHash latency (1080p).
+2. Structural Similarity Index (SSIM 1080p).
+3. Structural Similarity Index (SSIM 720p).
+4. Dynamic ROI Cluster Extraction (1080p).
+5. Multi-ROI Disjoint Cluster Extraction (1080p).
+6. Semantic Delta Classification (Radon Projection Profiles).
+7. Memory footprint (allocated heap and system memory).
 
 ---
 
@@ -77,22 +81,6 @@ When the Studio server is running (default port: `8686`):
 ### `GET /api/telemetry`
 Returns current engine telemetry snapshot.
 
-```json
-{
-  "total_frames": 120,
-  "passed_frames": 2,
-  "dropped_frames": 118,
-  "drop_ratio": 0.9833,
-  "total_tokens_naive": 30345,
-  "total_tokens_sent": 510,
-  "tokens_saved": 29835,
-  "saved_ratio": 0.9831,
-  "est_dollars_saved": 0.0745,
-  "avg_latency": 1140000,
-  "last_event_time": "2026-11-19T22:15:00Z"
-}
-```
-
 ### `GET /api/events/sse`
 Server-Sent Events (SSE) stream broadcasting real-time frame events:
 
@@ -102,6 +90,11 @@ data: {
   "timestamp": "2026-11-19T22:15:01Z",
   "ssim": 0.9124,
   "roi": {"x": 200, "y": 150, "width": 280, "height": 280},
+  "classification": {
+    "type": "TEXT_INPUT",
+    "confidence": 0.91,
+    "description": "Text input or code editing across 3 lines"
+  },
   "base64_data_uri": "data:image/jpeg;base64,...",
   "tokens_saved": 850,
   "tokens_sent": 255
@@ -109,14 +102,4 @@ data: {
 ```
 
 ### `POST /api/config`
-Updates engine parameters dynamically:
-
-```json
-{
-  "vision": {
-    "ssim_threshold": 0.985,
-    "phash_threshold": 2,
-    "padding_margin": 32
-  }
-}
-```
+Updates engine parameters dynamically at runtime.

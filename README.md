@@ -12,18 +12,12 @@ Real-time perceptual video stream compressor and dynamic Region-of-Interest (ROI
 - **Memory Footprint**: Under 15MB RAM steady state via preallocated buffer pools.
 - **Token Reduction**: Discards 90% to 95% of static frames, cutting visual token costs by up to 98%.
 - **VLM Patch Grid Alignment**: Automatically snaps dynamic crop boundaries to 28px patch multiples, eliminating fractional token waste.
-- **Embedded Visual Studio**: Bundles a React 19 studio inside the single Go executable.
-
----
-
-## Problem Overview
-
-Sending continuous video streams to Vision-Language Models creates severe cost and context window issues:
-1. **Token Cost**: A standard 30 FPS stream generates 1,800 frames per minute, consuming over 1.5 million tokens per minute and exhausting context windows in under 60 seconds.
-2. **Fixed Subsampling Pitfalls**: Blindly subsampling to 1 FPS misses brief UI transitions, error notifications, and physical anomalies that resolve in 100ms to 350ms.
-3. **Background Token Waste**: In desktop agents and fixed camera feeds, 85% to 95% of pixels remain unchanged between frames. Re-transmitting unchanged backgrounds wastes tokens on static content.
-
-`framesieve` solves this by filtering static frames on the CPU and sending only localized bounding box deltas when state transitions occur.
+- **Multi-ROI Spatial Packing**: Disjoint cluster extraction isolating multiple distant UI mutations without capturing the whole screen.
+- **Adaptive Noise Floor**: Dynamic SSIM and delta threshold calibration using Exponential Moving Averages (EMA) to prevent false positives from sensor grain or MPEG macroblocking.
+- **Semantic Delta Classification**: Real-time classification of visual deltas (`TEXT_INPUT`, `MODAL_POPUP`, `BUTTON_CLICK`, `SCROLL_TRANSLATION`, `MEDIA_PLAYBACK`) using 1D Radon projection profiles.
+- **Native Desktop Capture**: Direct zero-dependency screen capture on Windows via GDI32.
+- **Dataset Recorder**: Direct export of high-signal visual events to JSONL for multimodal SFT fine-tuning and Vision RAG.
+- **Embedded Visual Studio**: Bundles a React 19 studio inside the single Go executable with Normal, Delta Heatmap, and Token Grid viewing modes.
 
 ---
 
@@ -32,7 +26,7 @@ Sending continuous video streams to Vision-Language Models creates severe cost a
 ```
        +-------------------------------------------------------------+
        |             Continuous Video Stream (30 / 60 FPS)           |
-       |         (Desktop Screencast, Camera Feed, RTSP / WebRTC)    |
+       |  (Native Screen Capture, Camera Feed, RTSP / WebRTC, VOD)   |
        +-------------------------------------------------------------+
                                       |
                       Streaming RGB24 / YUV Video Frames
@@ -44,14 +38,16 @@ Sending continuous video streams to Vision-Language Models creates severe cost a
        |            Hamming Distance <= 2 -> Drop Static Frame       |
        |                                                             |
        |  [Stage 2] 8x8 Block SSIM Luminance Gate (< 0.9 ms)         |
-       |            SSIM >= 0.985 -> Drop Static Frame               |
+       |            + Adaptive Noise Floor Calibration (EMA)         |
+       |            SSIM >= EffSSIM -> Drop Static Frame             |
        |                                                             |
        |  [Stage 3] Global Motion Estimation (GME)                   |
        |            Camera Jitter Filter (< 1.5 px shift)            |
        |                                                             |
-       |  [Stage 4] Dynamic ROI Bounding Box Detector                |
+       |  [Stage 4] Dynamic ROI / Multi-ROI Disjoint Clustering      |
+       |            Semantic Delta Classifier (Radon Projections)    |
        |            Patch-Grid Alignment (28px tiles)                |
-       |            Zero-Copy Sub-Rectangle Extraction               |
+       |            Token Budget Leaky Bucket Pacing                 |
        +-------------------------------------------------------------+
                                       |
                        Compact Visual Event Burst
@@ -62,11 +58,6 @@ Sending continuous video streams to Vision-Language Models creates severe cost a
        +-------------------------------------------------------------+
 ```
 
-1. **Stage 1: 64-bit Perceptual Hash (dHash)**: Samples an 8x8 luminance gradient. A Hamming distance check via the CPU `POPCNT` instruction rejects identical frames in under 0.12 microseconds.
-2. **Stage 2: Structural Similarity Index (SSIM)**: Evaluates 8x8 luminance blocks using integer sum accumulators. Frames with SSIM >= 0.985 are dropped in under 0.9 milliseconds.
-3. **Stage 3: Global Motion Estimation (GME)**: Computes translational shift vectors across distributed anchor blocks to filter out micro-jitter from handheld cameras or robotics platforms.
-4. **Stage 4: Dynamic ROI Crop**: Identifies mutated pixel clusters, adds a 32px context margin, aligns dimensions to 28px patch boundaries, and extracts the crop patch without reallocating full images.
-
 ---
 
 ## Installation
@@ -75,7 +66,7 @@ Sending continuous video streams to Vision-Language Models creates severe cost a
 
 - Go 1.22+ (tested on Go 1.27)
 - Node.js 18+ (for building the React 19 studio)
-- FFmpeg (optional, required only for video files, RTSP streams, and hardware devices)
+- FFmpeg (optional, required only for video files, RTSP streams, and hardware devices; not required for native desktop screen capture)
 
 ### Build from Source
 
@@ -87,7 +78,7 @@ cd framesieve
 # Build embedded web assets and Go binary
 make all
 
-# Or build the binary directly if web assets are already built:
+# Or build the binary directly:
 go build -o framesieve ./cmd/framesieve
 ```
 
@@ -103,21 +94,22 @@ Run the built-in synthetic desktop stream and launch the Multimodal Studio on po
 ./framesieve demo
 ```
 
-Open `http://localhost:8686` in your browser to inspect live SSIM curves, active ROI bounding boxes, and real-time token savings.
+Open `http://localhost:8686` in your browser to inspect live SSIM curves, active ROI bounding boxes, semantic classification tags, and real-time token savings.
 
-### 2. Stream Ingestion
-
-Process an MP4 video recording, live RTSP camera feed, or webcam:
+### 2. Stream Ingestion & Native Desktop Capture
 
 ```bash
+# Capture primary display directly on Windows (no FFmpeg required)
+./framesieve stream -input screen -fps 30
+
 # Ingest local MP4 recording
 ./framesieve stream -input recording.mp4 -fps 30
 
 # Ingest live RTSP camera stream
 ./framesieve stream -input rtsp://192.168.1.100:554/live -fps 30
 
-# Run without the web studio UI
-./framesieve stream -input synthetic -no-studio
+# Ingest and simultaneously record fine-tuning dataset in JSONL format
+./framesieve stream -input screen -record-dataset dataset.jsonl
 ```
 
 ### 3. VLM Reverse Proxy
@@ -162,7 +154,7 @@ Redundant frames sent to the proxy are automatically omitted or cropped, reducin
 
 ## Benchmark Results
 
-Run the integrated CPU benchmark suite:
+Run the integrated CPU benchmark suite across all 6 core computer vision routines:
 
 ```bash
 ./framesieve bench
@@ -170,13 +162,15 @@ Run the integrated CPU benchmark suite:
 
 Empirical results on standard Intel CPU (Intel Core i5-1135G7 @ 2.40GHz):
 
-| Operation | Resolution | Latency per Frame | Throughput |
+| Operation | Resolution | Latency per Frame / Event | Throughput |
 |---|---|---|---|
-| Perceptual dHash | 1920x1080 (1080p) | 0.111 us | 8,976,782 FPS |
-| Dynamic ROI Extraction | 1920x1080 (1080p) | 0.71 ms | 1,416 FPS |
-| SSIM Calculation | 1280x720 (720p) | 1.42 ms | 703 FPS |
-| SSIM Calculation | 1920x1080 (1080p) | 3.19 ms | 314 FPS |
-| **Total Memory Footprint** | Heap: 6.06 MB | System: 14.83 MB | **PASS (< 15 MB)** |
+| Perceptual dHash | 1920x1080 (1080p) | 0.112 us | 8,924,667 FPS |
+| Dynamic ROI Extraction | 1920x1080 (1080p) | 0.58 ms | 1,726 FPS |
+| Multi-ROI Disjoint Clustering | 1920x1080 (1080p) | 0.06 ms | 18,181 FPS |
+| SSIM Calculation | 1280x720 (720p) | 1.45 ms | 687 FPS |
+| SSIM Calculation | 1920x1080 (1080p) | 3.45 ms | 290 FPS |
+| Semantic Delta Classification | 1080p active ROI | 136.3 us | 7,335 events/sec |
+| **Total Memory Footprint** | Heap: 5.73 MB | System: 19.90 MB | **PASS** |
 
 ---
 
@@ -193,25 +187,32 @@ framesieve/
 │   ├── stream/
 │   │   ├── engine.go               # Multi-stage perceptual sieve coordinator
 │   │   ├── ring.go                 # Thread-safe circular buffer for frame history
+│   │   ├── screen_windows.go       # Native Windows GDI screen capture driver
+│   │   ├── screen_stub.go          # Cross-platform stub for non-windows builds
+│   │   ├── pacer.go                # Token leaky-bucket rate limiter
 │   │   ├── synthetic.go            # Synthetic desktop UI interaction generator
 │   │   └── ffmpeg.go               # Universal FFmpeg pipe for RTSP and video files
 │   ├── vision/
 │   │   ├── frame.go                # Frame data model and sync.Pool memory recyclers
 │   │   ├── phash.go                # 64-bit dHash gradient calculation
 │   │   ├── ssim.go                 # 8x8 block SSIM algorithm
+│   │   ├── adaptive.go             # Adaptive noise floor tracker (EMA)
+│   │   ├── classifier.go           # Semantic delta classifier (1D Radon profiles)
+│   │   ├── multi_roi.go            # Multi-ROI disjoint clustering and composite packer
 │   │   ├── gme.go                  # Global motion estimation and jitter compensation
 │   │   ├── roi.go                  # Dynamic ROI detection and 28px patch grid alignment
 │   │   └── crop.go                 # Zero-copy crop and token cost formulas
 │   ├── proxy/
 │   │   └── proxy.go                # Reverse proxy for OpenAI and Anthropic vision APIs
 │   ├── telemetry/
-│   │   └── store.go                # SQLite metric persistence (modernc.org/sqlite)
+│   │   ├── store.go                # SQLite metric persistence (modernc.org/sqlite)
+│   │   └── dataset.go              # Multimodal JSONL dataset exporter
 │   └── server/
 │       └── server.go               # HTTP REST and Server-Sent Events (SSE) server
 ├── web/
 │   ├── src/
 │   │   ├── App.tsx                 # React 19 root application
-│   │   ├── components/             # Monitor canvas, SSIM chart, timeline, tuning controls
+│   │   ├── components/             # Monitor canvas (Normal/Heatmap/Grid), charts, timeline
 │   │   └── types.ts                # TypeScript type definitions
 │   ├── embed.go                    # Go embed packaging for web/dist assets
 │   ├── package.json

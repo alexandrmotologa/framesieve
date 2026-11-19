@@ -62,7 +62,7 @@ func printUsage() {
 
 func runStream(args []string) {
 	fs := flag.NewFlagSet("stream", flag.ExitOnError)
-	input := fs.String("input", "synthetic", "Input video file path, RTSP URL, or 'synthetic'")
+	input := fs.String("input", "synthetic", "Input video file path, RTSP URL, 'screen' (native capture), or 'synthetic'")
 	cfgPath := fs.String("config", "", "Path to YAML configuration file")
 	width := fs.Int("width", 1280, "Video frame width")
 	height := fs.Int("height", 720, "Video frame height")
@@ -70,6 +70,7 @@ func runStream(args []string) {
 	studioPort := fs.Int("port", 8686, "Port for Multimodal Studio HTTP & SSE server")
 	noStudio := fs.Bool("no-studio", false, "Disable Multimodal Studio web UI")
 	dbPath := fs.String("db", "framesieve.db", "SQLite database path for telemetry")
+	datasetPath := fs.String("record-dataset", "", "Optional path to export JSONL dataset for VLM fine-tuning")
 	_ = fs.Parse(args)
 
 	cfg, err := config.LoadConfig(*cfgPath)
@@ -86,10 +87,32 @@ func runStream(args []string) {
 		defer store.Close()
 	}
 
+	sessionID := fmt.Sprintf("stream-%d", time.Now().Unix())
+	var recorder *telemetry.DatasetRecorder
+	if *datasetPath != "" {
+		rec, err := telemetry.NewDatasetRecorder(*datasetPath, sessionID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to initialize dataset recorder: %v\n", err)
+		} else {
+			recorder = rec
+			defer recorder.Close()
+			fmt.Printf("[dataset] Recording VLM training entries to: %s\n", *datasetPath)
+		}
+	}
+
 	engine := stream.NewEngine(cfg, *width, *height)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	if recorder != nil {
+		eventSub := engine.Subscribe()
+		go func() {
+			for evt := range eventSub {
+				_ = recorder.RecordEvent(evt, evt.Classification)
+			}
+		}()
+	}
 
 	if !*noStudio {
 		distFS, _ := web.GetDistFS()
@@ -115,6 +138,11 @@ func runStream(args []string) {
 				EventPeriod: 30,
 			}
 			_ = stream.GenerateSyntheticFeed(ctx, synthCfg, engine.Pool(), frameChan)
+		} else if *input == "screen" {
+			fmt.Printf("[screen] Capturing native primary display at %dx%d (%d FPS)...\n", *width, *height, *fps)
+			if err := stream.IngestNativeScreen(ctx, *width, *height, *fps, engine.Pool(), frameChan); err != nil {
+				fmt.Fprintf(os.Stderr, "Native screen capture error: %v\n", err)
+			}
 		} else {
 			ffmpegCfg := stream.FFmpegStreamConfig{
 				InputURL: *input,
@@ -285,6 +313,28 @@ func runBench(args []string) {
 	roiMs := float64(roiDur.Nanoseconds()) / float64(roiIters*1000000)
 	roiFPS := float64(roiIters) / roiDur.Seconds()
 	fmt.Printf("4. Dynamic ROI Cluster Extraction (1080p):\n   Latency: %.2f ms/frame | Throughput: %.0f FPS\n\n", roiMs, roiFPS)
+
+	// Benchmark 5: Multi-ROI Disjoint Clustering (1080p)
+	t4 := time.Now()
+	for i := 0; i < roiIters; i++ {
+		_ = vision.DetectMultiROI(lum1080A, lum1080B, w1080, h1080, 24, 64, 32, 28, 3)
+	}
+	multiDur := time.Since(t4)
+	multiMs := float64(multiDur.Nanoseconds()) / float64(roiIters*1000000)
+	multiFPS := float64(roiIters) / multiDur.Seconds()
+	fmt.Printf("5. Multi-ROI Disjoint Cluster Extraction (1080p):\n   Latency: %.2f ms/frame | Throughput: %.0f FPS\n\n", multiMs, multiFPS)
+
+	// Benchmark 6: Semantic Delta Classification (1080p)
+	testBox := vision.BoundingBox{X: 800, Y: 400, Width: 400, Height: 250}
+	const classIters = 5000
+	t5 := time.Now()
+	for i := 0; i < classIters; i++ {
+		_ = vision.ClassifySemanticDelta(lum1080A, lum1080B, w1080, h1080, testBox, 24, vision.Point{})
+	}
+	classDur := time.Since(t5)
+	classUs := float64(classDur.Nanoseconds()) / float64(classIters*1000)
+	classFPS := float64(classIters) / classDur.Seconds()
+	fmt.Printf("6. Semantic Delta Classification (Radon Projection Profiles):\n   Latency: %.3f us/event | Throughput: %.0f events/sec\n\n", classUs, classFPS)
 
 	// Memory usage report
 	var m runtime.MemStats

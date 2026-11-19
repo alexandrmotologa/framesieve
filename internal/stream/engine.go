@@ -28,25 +28,28 @@ type TelemetrySnapshot struct {
 
 // FrameEvent is dispatched whenever a significant semantic visual delta occurs.
 type FrameEvent struct {
-	Timestamp      time.Time           `json:"timestamp"`
-	TriggerFrame   *vision.Frame       `json:"trigger_frame"`
-	PreEventFrame  *vision.Frame       `json:"pre_event_frame,omitempty"`
-	CroppedImage   []byte              `json:"-"`
-	Base64DataURI  string              `json:"base64_data_uri,omitempty"`
-	SSIM           float64             `json:"ssim"`
-	ROI            *vision.BoundingBox `json:"roi,omitempty"`
-	TokensSaved    int                 `json:"tokens_saved"`
-	TokensSent     int                 `json:"tokens_sent"`
-	FullTokensCost int                 `json:"full_tokens_cost"`
+	Timestamp      time.Time                      `json:"timestamp"`
+	TriggerFrame   *vision.Frame                  `json:"trigger_frame"`
+	PreEventFrame  *vision.Frame                  `json:"pre_event_frame,omitempty"`
+	CroppedImage   []byte                         `json:"-"`
+	Base64DataURI  string                         `json:"base64_data_uri,omitempty"`
+	SSIM           float64                        `json:"ssim"`
+	ROI            *vision.BoundingBox            `json:"roi,omitempty"`
+	Classification *vision.SemanticClassification `json:"classification,omitempty"`
+	TokensSaved    int                            `json:"tokens_saved"`
+	TokensSent     int                            `json:"tokens_sent"`
+	FullTokensCost int                            `json:"full_tokens_cost"`
 }
 
 // Engine coordinates stream ingestion, vision sieving, ring buffer, and event dispatch.
 type Engine struct {
-	cfg        *config.SieveConfig
-	pool       *vision.FramePool
-	ring       *RingBuffer
+	cfg         *config.SieveConfig
+	pool        *vision.FramePool
+	ring        *RingBuffer
+	adaptive    *vision.AdaptiveNoiseTracker
+	pacer       *TokenPacer
 	subscribers []chan FrameEvent
-	subMu      sync.RWMutex
+	subMu       sync.RWMutex
 
 	// Atomic telemetry counters
 	totalFrames      int64
@@ -69,11 +72,15 @@ func NewEngine(cfg *config.SieveConfig, width, height int) *Engine {
 	}
 	pool := vision.NewFramePool(width, height)
 	ring := NewRingBuffer(cfg.Engine.RingBufferSize, pool)
+	adaptive := vision.NewAdaptiveNoiseTracker(0.1)
+	pacer := NewTokenPacer(100000, 200*time.Millisecond)
 
 	return &Engine{
 		cfg:         cfg,
 		pool:        pool,
 		ring:        ring,
+		adaptive:    adaptive,
+		pacer:       pacer,
 		subscribers: make([]chan FrameEvent, 0),
 	}
 }
@@ -187,11 +194,14 @@ func (e *Engine) processFrame(frame *vision.Frame) {
 		return
 	}
 
-	// Stage 2: Structural Similarity (SSIM) Gate (< 0.9ms)
+	// Stage 2: Structural Similarity (SSIM) Gate with Adaptive Noise Calibration
+	e.adaptive.Update(ref.Luminance, frame.Luminance, frame.Width, frame.Height)
+	effSSIM, effDelta := e.adaptive.GetEffectiveThresholds(e.cfg.Vision.SSIMThreshold, e.cfg.Vision.PixelDeltaMin)
+
 	ssimVal := vision.ComputeSSIM(ref.Luminance, frame.Luminance, frame.Width, frame.Height, 8)
 	frame.SSIM = ssimVal
 
-	if ssimVal >= e.cfg.Vision.SSIMThreshold {
+	if ssimVal >= effSSIM {
 		frame.Dropped = true
 		frame.DropCode = "ssim_static"
 		frame.Latency = time.Since(start)
@@ -230,7 +240,7 @@ func (e *Engine) processFrame(frame *vision.Frame) {
 	roi := vision.DetectROI(
 		ref.Luminance, frame.Luminance,
 		frame.Width, frame.Height,
-		e.cfg.Vision.PixelDeltaMin,
+		effDelta,
 		e.cfg.Vision.MinClusterArea,
 		e.cfg.Vision.PaddingMargin,
 		e.cfg.Vision.PatchGridAlign,
@@ -239,6 +249,13 @@ func (e *Engine) processFrame(frame *vision.Frame) {
 
 	frame.ROI = roi
 	frame.IsKey = true
+
+	// Semantic classification
+	var classification *vision.SemanticClassification
+	if roi != nil {
+		c := vision.ClassifySemanticDelta(ref.Luminance, frame.Luminance, frame.Width, frame.Height, *roi, effDelta, frame.Motion)
+		classification = &c
+	}
 
 	var sentTokens int
 	var croppedBytes []byte
@@ -261,6 +278,21 @@ func (e *Engine) processFrame(frame *vision.Frame) {
 			frame.Cropped = encoded
 		}
 		sentTokens = fullTokens
+	}
+
+	// Token budget pacer check
+	if !e.pacer.Allow(sentTokens, ssimVal) {
+		frame.Dropped = true
+		frame.DropCode = "pacer_throttled"
+		frame.Latency = time.Since(start)
+
+		atomic.AddInt64(&e.droppedFrames, 1)
+		atomic.AddInt64(&e.tokensSaved, int64(fullTokens))
+		atomic.AddInt64(&e.totalLatencyNs, frame.Latency.Nanoseconds())
+
+		e.refMu.Unlock()
+		e.pool.Put(frame)
+		return
 	}
 
 	savedTokens := fullTokens - sentTokens
@@ -299,6 +331,7 @@ func (e *Engine) processFrame(frame *vision.Frame) {
 		Base64DataURI:  dataURI,
 		SSIM:           ssimVal,
 		ROI:            roi,
+		Classification: classification,
 		TokensSaved:    savedTokens,
 		TokensSent:     sentTokens,
 		FullTokensCost: fullTokens,
