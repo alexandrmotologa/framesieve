@@ -1,8 +1,28 @@
-# framesieve
+<p align="center">
+  <img src="docs/images/logo.png?raw=true" alt="framesieve Logo" width="130" style="border-radius: 24px;" />
+</p>
 
-Real-time perceptual video stream compressor and dynamic Region-of-Interest (ROI) extractor for Vision-Language Models.
+<h1 align="center">framesieve</h1>
 
-`framesieve` evaluates video streams (desktop screencasts, webcam feeds, and CCTV streams) on CPU, filtering out redundant frames and extracting active visual deltas before sending payloads to upstream Vision-Language Models (GPT-4o Vision, Gemini 1.5 Pro, Claude Sonnet).
+<p align="center">
+  <strong>Real-time perceptual video compressor and dynamic Region-of-Interest (ROI) extractor for Vision-Language Models</strong>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Language-Go%201.27-00ADD8?style=flat-square&logo=go" alt="Go" />
+  <img src="https://img.shields.io/badge/Studio-React%2019-61DAFB?style=flat-square&logo=react" alt="React 19" />
+  <img src="https://img.shields.io/badge/Latency-%3C%201.5ms%20CPU-10b981?style=flat-square" alt="Latency" />
+  <img src="https://img.shields.io/badge/Memory-%3C%2015MB%20RAM-8b5cf6?style=flat-square" alt="Memory" />
+  <img src="https://img.shields.io/badge/Token%20Savings-90%25%20--%2098%25-emerald?style=flat-square" alt="Token Savings" />
+</p>
+
+---
+
+## Live Demonstration
+
+<p align="center">
+  <img src="docs/images/framesieve_demo.gif?raw=true" alt="framesieve Live Multimodal Studio Demo" width="100%" />
+</p>
 
 ---
 
@@ -60,13 +80,23 @@ Real-time perceptual video stream compressor and dynamic Region-of-Interest (ROI
 
 ---
 
+## Multimodal Studio & Responsive UI
+
+The React 19 Studio is served locally on `:8686`, featuring real-time Server-Sent Events (SSE), interactive canvas overlays, threshold sliders, and responsive layouts across desktop and mobile devices.
+
+| Desktop Telemetry Console (1440x900) | Mobile Responsive Layout (390x844) |
+|:---:|:---:|
+| <img src="docs/images/framesieve_dashboard.png?raw=true" alt="framesieve Desktop Dashboard" width="100%" /> | <img src="docs/images/framesieve_mobile.png?raw=true" alt="framesieve Mobile Studio" width="280" /> |
+
+---
+
 ## Installation
 
 ### Prerequisites
 
 - Go 1.22+ (tested on Go 1.27)
-- Node.js 18+ (for building the React 19 studio)
-- FFmpeg (optional, required only for video files, RTSP streams, and hardware devices; not required for native desktop screen capture)
+- Node.js 18+ (for compiling the React 19 studio)
+- FFmpeg (optional, required only for video files, RTSP streams, and external devices; not required for native desktop screen capture)
 
 ### Build from Source
 
@@ -108,7 +138,7 @@ Open `http://localhost:8686` in your browser to inspect live SSIM curves, active
 # Ingest live RTSP camera stream
 ./framesieve stream -input rtsp://192.168.1.100:554/live -fps 30
 
-# Ingest and simultaneously record fine-tuning dataset in JSONL format
+# Ingest and record fine-tuning dataset in JSONL format
 ./framesieve stream -input screen -record-dataset dataset.jsonl
 ```
 
@@ -205,8 +235,7 @@ framesieve/
 │   ├── proxy/
 │   │   └── proxy.go                # Reverse proxy for OpenAI and Anthropic vision APIs
 │   ├── telemetry/
-│   │   ├── store.go                # SQLite metric persistence (modernc.org/sqlite)
-│   │   └── dataset.go              # Multimodal JSONL dataset exporter
+│   │   └── store.go                # SQLite metric persistence (modernc.org/sqlite)
 │   └── server/
 │       └── server.go               # HTTP REST and Server-Sent Events (SSE) server
 ├── web/
@@ -223,7 +252,13 @@ framesieve/
 ├── docs/
 │   ├── architecture.md             # Detailed engineering and algorithm specifications
 │   ├── vlm_token_economics.md      # Mathematical token cost comparison
-│   └── api_reference.md            # CLI and API documentation
+│   ├── api_reference.md            # CLI and API documentation
+│   └── images/
+│       ├── logo.svg                # Vector mascot logo
+│       ├── logo.png                # High-resolution 1024x1024 mascot emblem
+│       ├── framesieve_dashboard.png# Desktop studio screenshot
+│       ├── framesieve_mobile.png   # Mobile responsive studio screenshot
+│       └── framesieve_demo.gif     # Animated live demonstration GIF
 ├── Makefile
 ├── go.mod
 ├── go.sum
